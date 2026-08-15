@@ -83,10 +83,16 @@ const stopBtn = document.getElementById('stopBtn');
 
 let headingHistory = []; // {t, h}
 const windowMs = 3000;
-const turnThresholdDeg = 30;
-const cooldownMs = 2000;
-let lastTurnTime = 0;
+const turnThresholdDeg = 25;      // min change to count as "turning"
+const stableMs = 1200;            // heading must stop changing for this long = turn finished
+const minGapFromLastReading = 0.5; // deg/sample considered "stable"
 let running = false;
+
+// Turn-in-progress state
+let turnInProgress = false;
+let turnStartHeading = null;
+let turnStartTime = null;
+let lastMovingTime = null;
 
 function angleDiff(a, b) {
   let d = a - b;
@@ -113,27 +119,49 @@ function handleOrientation(event) {
   const now = Date.now();
   headingHistory.push({ t: now, h: heading });
   headingHistory = headingHistory.filter(p => now - p.t <= windowMs);
+  if (headingHistory.length < 2) return;
 
-  if (headingHistory.length === 0) return;
-  const oldest = headingHistory[0];
-  const delta = angleDiff(heading, oldest.h);
+  // Rate of change since the previous sample (short-term, not windowed)
+  const prev = headingHistory[headingHistory.length - 2];
+  const instantDelta = Math.abs(angleDiff(heading, prev.h));
+  const isMovingNow = instantDelta > minGapFromLastReading;
 
-  if (Math.abs(delta) >= turnThresholdDeg) {
-    if (now - lastTurnTime > cooldownMs) {
-      lastTurnTime = now;
-      const dir = delta > 0 ? 'RIGHT' : 'LEFT';
-      turnEventEl.textContent = `${dir} TURN (${Math.abs(delta).toFixed(0)}°)`;
-      turnEventEl.style.color = dir === 'LEFT' ? '#4da3ff' : '#ff9f40';
+  if (isMovingNow) lastMovingTime = now;
 
-      const line = document.createElement('div');
-      line.className = 'logline ' + (dir === 'LEFT' ? 'left' : 'right');
-      const timeStr = new Date(now).toLocaleTimeString();
-      line.textContent = `${timeStr} — ${dir} turn, Δ${Math.abs(delta).toFixed(0)}°`;
-      logEl.prepend(line);
+  if (!turnInProgress) {
+    // Check if we've drifted enough from the start of the window to call this a turn
+    const oldest = headingHistory[0];
+    const windowDelta = angleDiff(heading, oldest.h);
+    if (Math.abs(windowDelta) >= turnThresholdDeg) {
+      turnInProgress = true;
+      turnStartHeading = oldest.h;
+      turnStartTime = oldest.t;
+      lastMovingTime = now;
+      turnEventEl.textContent = 'Turning…';
+      turnEventEl.style.color = '#ffcc00';
     }
   } else {
-    turnEventEl.textContent = '—';
-    turnEventEl.style.color = '#888';
+    // We're mid-turn: wait until heading has been stable (not moving) for stableMs
+    const quietFor = now - lastMovingTime;
+    if (quietFor >= stableMs) {
+      const totalDelta = angleDiff(heading, turnStartHeading);
+      if (Math.abs(totalDelta) >= turnThresholdDeg) {
+        const dir = totalDelta > 0 ? 'RIGHT' : 'LEFT';
+        turnEventEl.textContent = `${dir} TURN (${Math.abs(totalDelta).toFixed(0)}°)`;
+        turnEventEl.style.color = dir === 'LEFT' ? '#4da3ff' : '#ff9f40';
+
+        const line = document.createElement('div');
+        line.className = 'logline ' + (dir === 'LEFT' ? 'left' : 'right');
+        const timeStr = new Date(now).toLocaleTimeString();
+        line.textContent = `${timeStr} — ${dir} turn, Δ${Math.abs(totalDelta).toFixed(0)}°`;
+        logEl.prepend(line);
+      }
+      // Reset for next turn
+      turnInProgress = false;
+      turnStartHeading = null;
+      turnStartTime = null;
+      headingHistory = [{ t: now, h: heading }]; // clear window so old data doesn't retrigger
+    }
   }
 }
 
