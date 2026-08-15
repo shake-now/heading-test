@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Heading & Turn Test</title>
+<style>
+  body {
+    margin: 0;
+    padding: 20px;
+    font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+    background: #111;
+    color: #eee;
+    text-align: center;
+  }
+  h1 { font-size: 18px; color: #999; font-weight: 500; }
+  #heading {
+    font-size: 64px;
+    font-weight: 700;
+    margin: 20px 0;
+  }
+  #status {
+    font-size: 14px;
+    color: #888;
+    margin-bottom: 10px;
+  }
+  #turnEvent {
+    font-size: 24px;
+    font-weight: 700;
+    min-height: 32px;
+    color: #ff9500;
+    margin-bottom: 20px;
+  }
+  button {
+    font-size: 18px;
+    padding: 14px 28px;
+    margin: 6px;
+    border-radius: 12px;
+    border: none;
+    background: #007aff;
+    color: white;
+    font-weight: 600;
+  }
+  button.stop { background: #444; }
+  #log {
+    margin-top: 20px;
+    text-align: left;
+    max-height: 45vh;
+    overflow-y: auto;
+    background: #1c1c1e;
+    border-radius: 10px;
+    padding: 10px;
+  }
+  .logline {
+    font-family: monospace;
+    font-size: 14px;
+    padding: 6px 4px;
+    border-bottom: 1px solid #2a2a2c;
+  }
+  .left { color: #4da3ff; }
+  .right { color: #ff9f40; }
+</style>
+</head>
+<body>
+
+<h1>Compass Heading & Turn Detection Test</h1>
+<div id="status">Not started</div>
+<div id="heading">--°</div>
+<div id="turnEvent">—</div>
+
+<button id="startBtn">Start</button>
+<button id="stopBtn" class="stop">Stop</button>
+
+<div id="log"></div>
+
+<script>
+const headingEl = document.getElementById('heading');
+const statusEl = document.getElementById('status');
+const turnEventEl = document.getElementById('turnEvent');
+const logEl = document.getElementById('log');
+const startBtn = document.getElementById('startBtn');
+const stopBtn = document.getElementById('stopBtn');
+
+let headingHistory = []; // {t, h}
+const windowMs = 3000;
+const turnThresholdDeg = 30;
+const cooldownMs = 2000;
+let lastTurnTime = 0;
+let running = false;
+
+function angleDiff(a, b) {
+  let d = a - b;
+  while (d > 180) d -= 360;
+  while (d < -180) d += 360;
+  return d;
+}
+
+function handleOrientation(event) {
+  let heading;
+  // iOS Safari gives webkitCompassHeading (0 = North, clockwise, already absolute)
+  if (event.webkitCompassHeading !== undefined && event.webkitCompassHeading !== null) {
+    heading = event.webkitCompassHeading;
+  } else if (event.alpha !== null) {
+    // Fallback for non-iOS browsers (less reliable, not true compass)
+    heading = 360 - event.alpha;
+  } else {
+    return;
+  }
+
+  headingEl.textContent = heading.toFixed(1) + '°';
+  statusEl.textContent = 'Running';
+
+  const now = Date.now();
+  headingHistory.push({ t: now, h: heading });
+  headingHistory = headingHistory.filter(p => now - p.t <= windowMs);
+
+  if (headingHistory.length === 0) return;
+  const oldest = headingHistory[0];
+  const delta = angleDiff(heading, oldest.h);
+
+  if (Math.abs(delta) >= turnThresholdDeg) {
+    if (now - lastTurnTime > cooldownMs) {
+      lastTurnTime = now;
+      const dir = delta > 0 ? 'RIGHT' : 'LEFT';
+      turnEventEl.textContent = `${dir} TURN (${Math.abs(delta).toFixed(0)}°)`;
+      turnEventEl.style.color = dir === 'LEFT' ? '#4da3ff' : '#ff9f40';
+
+      const line = document.createElement('div');
+      line.className = 'logline ' + (dir === 'LEFT' ? 'left' : 'right');
+      const timeStr = new Date(now).toLocaleTimeString();
+      line.textContent = `${timeStr} — ${dir} turn, Δ${Math.abs(delta).toFixed(0)}°`;
+      logEl.prepend(line);
+    }
+  } else {
+    turnEventEl.textContent = '—';
+    turnEventEl.style.color = '#888';
+  }
+}
+
+function startTracking() {
+  headingHistory = [];
+  logEl.innerHTML = '';
+
+  if (typeof DeviceOrientationEvent !== 'undefined' &&
+      typeof DeviceOrientationEvent.requestPermission === 'function') {
+    // iOS 13+ requires explicit permission
+    DeviceOrientationEvent.requestPermission()
+      .then(response => {
+        if (response === 'granted') {
+          window.addEventListener('deviceorientation', handleOrientation, true);
+          running = true;
+          statusEl.textContent = 'Running';
+        } else {
+          statusEl.textContent = 'Permission denied';
+        }
+      })
+      .catch(err => {
+        statusEl.textContent = 'Error: ' + err.message;
+      });
+  } else if ('DeviceOrientationEvent' in window) {
+    // Non-iOS or older iOS, no permission prompt needed
+    window.addEventListener('deviceorientation', handleOrientation, true);
+    running = true;
+    statusEl.textContent = 'Running';
+  } else {
+    statusEl.textContent = 'Device orientation not supported on this browser';
+  }
+}
+
+function stopTracking() {
+  window.removeEventListener('deviceorientation', handleOrientation, true);
+  running = false;
+  statusEl.textContent = 'Stopped';
+}
+
+startBtn.addEventListener('click', startTracking);
+stopBtn.addEventListener('click', stopTracking);
+</script>
+
+</body>
+</html>
