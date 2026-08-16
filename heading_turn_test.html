@@ -85,8 +85,10 @@ let headingHistory = []; // {t, h}
 const windowMs = 3000;
 const turnThresholdDeg = 25;      // min change to count as "turning"
 const stableMs = 1200;            // heading must stop changing for this long = turn finished
-const minGapFromLastReading = 0.5; // deg/sample considered "stable"
+const minGapFromLastReading = 2.5; // deg/sample considered "stable" (loosened for sensor noise)
+const smoothingFactor = 0.3;      // 0 = no smoothing, 1 = instant (ignore new readings)
 let running = false;
+let smoothedHeading = null;
 
 // Turn-in-progress state
 let turnInProgress = false;
@@ -101,17 +103,28 @@ function angleDiff(a, b) {
   return d;
 }
 
+function smoothAngle(prevSmoothed, rawNew, factor) {
+  if (prevSmoothed === null) return rawNew;
+  const diff = angleDiff(rawNew, prevSmoothed);
+  return prevSmoothed + diff * factor;
+}
+
 function handleOrientation(event) {
-  let heading;
+  let rawHeading;
   // iOS Safari gives webkitCompassHeading (0 = North, clockwise, already absolute)
   if (event.webkitCompassHeading !== undefined && event.webkitCompassHeading !== null) {
-    heading = event.webkitCompassHeading;
+    rawHeading = event.webkitCompassHeading;
   } else if (event.alpha !== null) {
     // Fallback for non-iOS browsers (less reliable, not true compass)
-    heading = 360 - event.alpha;
+    rawHeading = 360 - event.alpha;
   } else {
     return;
   }
+
+  smoothedHeading = smoothAngle(smoothedHeading, rawHeading, smoothingFactor);
+  let heading = smoothedHeading;
+  if (heading < 0) heading += 360;
+  if (heading >= 360) heading -= 360;
 
   headingEl.textContent = heading.toFixed(1) + '°';
   statusEl.textContent = 'Running';
@@ -127,6 +140,7 @@ function handleOrientation(event) {
   const isMovingNow = instantDelta > minGapFromLastReading;
 
   if (isMovingNow) lastMovingTime = now;
+  if (lastMovingTime === null) lastMovingTime = now;
 
   if (!turnInProgress) {
     // Check if we've drifted enough from the start of the window to call this a turn
@@ -143,7 +157,9 @@ function handleOrientation(event) {
   } else {
     // We're mid-turn: wait until heading has been stable (not moving) for stableMs
     const quietFor = now - lastMovingTime;
-    if (quietFor >= stableMs) {
+    const turnTakingTooLong = now - turnStartTime > 8000; // safety valve: force-resolve after 8s no matter what
+
+    if (quietFor >= stableMs || turnTakingTooLong) {
       const totalDelta = angleDiff(heading, turnStartHeading);
       if (Math.abs(totalDelta) >= turnThresholdDeg) {
         const dir = totalDelta > 0 ? 'RIGHT' : 'LEFT';
